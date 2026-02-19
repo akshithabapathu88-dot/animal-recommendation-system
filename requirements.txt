@@ -1,7 +1,8 @@
 streamlit
 numpy
 pillow
-matplotlib
+tensorflow
 scikit-learn
 faiss-cpu
-tensorflow
+kaggle
+
