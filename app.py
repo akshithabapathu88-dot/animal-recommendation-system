@@ -2,6 +2,7 @@ import streamlit as st
 import numpy as np
 import os
 from PIL import Image
+import zipfile
 
 import faiss
 from sklearn.neighbors import NearestNeighbors
@@ -15,37 +16,41 @@ from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 st.set_page_config(page_title="Animal Recommendation System", layout="wide")
 
 st.title("🐾 Animal Image Recommendation System")
-st.write("Upload an animal image and get similar recommendations using:")
+st.write("Upload an animal image and get recommendations using:")
 st.markdown("✅ KNN   ⚡ FAISS Flat   🚀 FAISS IVF")
-
 st.divider()
 
 # ==========================================
-# 2️⃣ Download Kaggle Dataset Automatically
+# 2️⃣ Kaggle Dataset Auto Download
 # ==========================================
-
 DATASET_FOLDER = "animals"
 
 if not os.path.exists(DATASET_FOLDER):
 
-    st.warning("📥 Dataset not found. Downloading from Kaggle...")
+    st.warning("Dataset not found. Downloading from Kaggle...")
 
+    # Kaggle secrets
+    os.environ["KAGGLE_USERNAME"] = st.secrets["KAGGLE_USERNAME"]
+    os.environ["KAGGLE_KEY"] = st.secrets["KAGGLE_KEY"]
+
+    # Download dataset
     os.system(
         "kaggle datasets download -d iamsouravbanerjee/animal-image-dataset-90-different-animals"
     )
-    os.system(
-        "unzip animal-image-dataset-90-different-animals.zip -d animal_dataset"
-    )
-    os.system(
-        "mv animal_dataset/animals animals"
-    )
+
+    # Extract zip
+    with zipfile.ZipFile(
+        "animal-image-dataset-90-different-animals.zip", "r"
+    ) as zip_ref:
+        zip_ref.extractall("dataset")
+
+    os.rename("dataset/animals", "animals")
 
     st.success("✅ Dataset Downloaded Successfully!")
 
 # ==========================================
 # 3️⃣ Load Dataset Image Paths
 # ==========================================
-
 image_paths = []
 
 for root, dirs, files in os.walk(DATASET_FOLDER):
@@ -56,13 +61,12 @@ for root, dirs, files in os.walk(DATASET_FOLDER):
 st.success(f"✅ Total Dataset Images Found: {len(image_paths)}")
 
 if len(image_paths) == 0:
-    st.error("❌ No images found in dataset folder.")
+    st.error("No images found in dataset folder!")
     st.stop()
 
 # ==========================================
 # 4️⃣ Load MobileNetV2 Model
 # ==========================================
-
 @st.cache_resource
 def load_model():
     return MobileNetV2(weights="imagenet", include_top=False, pooling="avg")
@@ -72,7 +76,6 @@ model = load_model()
 # ==========================================
 # 5️⃣ Extract Embedding Function
 # ==========================================
-
 def extract_embedding(img):
 
     img = img.resize((224, 224))
@@ -87,12 +90,11 @@ def extract_embedding(img):
 # ==========================================
 # 6️⃣ Load or Create Embeddings
 # ==========================================
-
 embedding_file = "animal_embeddings.npy"
 
 if not os.path.exists(embedding_file):
 
-    st.warning("⚠️ Embeddings not found. Creating embeddings (first time takes few minutes)...")
+    st.warning("Embeddings not found. Creating embeddings...")
 
     embeddings = []
     progress = st.progress(0)
@@ -106,7 +108,6 @@ if not os.path.exists(embedding_file):
         progress.progress((i + 1) / len(image_paths))
 
     embeddings = np.array(embeddings)
-
     np.save(embedding_file, embeddings)
 
     st.success("✅ Embeddings Extracted and Saved!")
@@ -140,14 +141,12 @@ index_ivf.add(embeddings)
 
 index_ivf.nprobe = 10
 
-st.success("✅ Recommendation Models Ready!")
-
+st.success("✅ All Recommendation Models Ready!")
 st.divider()
 
 # ==========================================
-# 8️⃣ Display Function
+# 8️⃣ Display Recommendation Function
 # ==========================================
-
 def show_results(title, indices):
 
     st.subheader(title)
@@ -155,14 +154,12 @@ def show_results(title, indices):
     cols = st.columns(5)
 
     for i, idx in enumerate(indices):
-
         img = Image.open(image_paths[idx])
         cols[i].image(img, width=150)
 
 # ==========================================
 # 9️⃣ Upload Query Image
 # ==========================================
-
 uploaded_file = st.file_uploader(
     "📌 Upload Query Animal Image",
     type=["jpg", "jpeg", "png"]
@@ -178,15 +175,21 @@ if uploaded_file is not None:
 
     k = 5
 
-    # ---- KNN ----
+    # ==============================
+    # KNN Recommendations
+    # ==============================
     distances_knn, indices_knn = knn.kneighbors([query_vector], k)
     show_results("✅ KNN Recommendations", indices_knn[0])
 
-    # ---- FAISS Flat ----
+    # ==============================
+    # FAISS Flat Recommendations
+    # ==============================
     D_flat, I_flat = index_flat.search(np.array([query_vector]), k)
     show_results("⚡ FAISS Flat Recommendations", I_flat[0])
 
-    # ---- FAISS IVF ----
+    # ==============================
+    # FAISS IVF Recommendations
+    # ==============================
     D_ivf, I_ivf = index_ivf.search(np.array([query_vector]), k)
     show_results("🚀 FAISS IVF Recommendations", I_ivf[0])
 
