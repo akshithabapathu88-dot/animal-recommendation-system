@@ -9,7 +9,6 @@ from sklearn.neighbors import NearestNeighbors
 from tensorflow.keras.applications import MobileNetV2
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 
-
 # ==========================================
 # 1️⃣ Streamlit Page Setup
 # ==========================================
@@ -21,96 +20,93 @@ st.markdown("✅ KNN   ⚡ FAISS Flat   🚀 FAISS IVF")
 
 st.divider()
 
-
 # ==========================================
-# 2️⃣ Dataset Folder Path
+# 2️⃣ Download Kaggle Dataset Automatically
 # ==========================================
-dataset_path = "animals"   # Folder must exist
 
-if not os.path.exists(dataset_path):
-    st.error("❌ Dataset folder not found! Please create an 'animals/' folder.")
-    st.stop()
+DATASET_FOLDER = "animals"
 
+if not os.path.exists(DATASET_FOLDER):
+
+    st.warning("📥 Dataset not found. Downloading from Kaggle...")
+
+    os.system(
+        "kaggle datasets download -d iamsouravbanerjee/animal-image-dataset-90-different-animals"
+    )
+    os.system(
+        "unzip animal-image-dataset-90-different-animals.zip -d animal_dataset"
+    )
+    os.system(
+        "mv animal_dataset/animals animals"
+    )
+
+    st.success("✅ Dataset Downloaded Successfully!")
 
 # ==========================================
 # 3️⃣ Load Dataset Image Paths
 # ==========================================
+
 image_paths = []
 
-for root, dirs, files in os.walk(dataset_path):
+for root, dirs, files in os.walk(DATASET_FOLDER):
     for file in files:
         if file.lower().endswith((".jpg", ".jpeg", ".png")):
             image_paths.append(os.path.join(root, file))
 
 st.success(f"✅ Total Dataset Images Found: {len(image_paths)}")
 
-# Stop if dataset is empty
 if len(image_paths) == 0:
-    st.error("❌ No images found inside 'animals/' folder!")
-    st.info("👉 Please add images like cat.jpg, dog.jpg, tiger.jpg inside animals/")
+    st.error("❌ No images found in dataset folder.")
     st.stop()
-
 
 # ==========================================
 # 4️⃣ Load MobileNetV2 Model
 # ==========================================
+
 @st.cache_resource
 def load_model():
     return MobileNetV2(weights="imagenet", include_top=False, pooling="avg")
 
 model = load_model()
 
-
 # ==========================================
 # 5️⃣ Extract Embedding Function
 # ==========================================
+
 def extract_embedding(img):
 
-    img = img.convert("RGB")  # Ensure 3 channels
     img = img.resize((224, 224))
-
     img_array = np.array(img)
+
     img_array = np.expand_dims(img_array, axis=0)
     img_array = preprocess_input(img_array)
 
     emb = model.predict(img_array, verbose=0)
     return emb.flatten()
 
-
 # ==========================================
 # 6️⃣ Load or Create Embeddings
 # ==========================================
-embedding_file = "animal_embeddings.npy"
 
-# Always regenerate if file is too small
-if os.path.exists(embedding_file) and os.path.getsize(embedding_file) < 5000:
-    os.remove(embedding_file)
-    st.warning("⚠️ Old embedding file was empty. Deleted it!")
+embedding_file = "animal_embeddings.npy"
 
 if not os.path.exists(embedding_file):
 
-    st.warning("⚠️ Embedding file not found!")
-    st.write("Creating embeddings now... (first run may take few minutes)")
+    st.warning("⚠️ Embeddings not found. Creating embeddings (first time takes few minutes)...")
 
     embeddings = []
     progress = st.progress(0)
 
     for i, img_path in enumerate(image_paths):
 
-        try:
-            img = Image.open(img_path)
-            emb = extract_embedding(img)
-            embeddings.append(emb)
-
-        except Exception as e:
-            st.error(f"Error processing image: {img_path}")
-            st.write(e)
+        img = Image.open(img_path)
+        emb = extract_embedding(img)
+        embeddings.append(emb)
 
         progress.progress((i + 1) / len(image_paths))
 
     embeddings = np.array(embeddings)
 
-    # Save embeddings
     np.save(embedding_file, embeddings)
 
     st.success("✅ Embeddings Extracted and Saved!")
@@ -119,8 +115,7 @@ else:
     embeddings = np.load(embedding_file)
     st.success("✅ Embeddings Loaded Successfully!")
 
-st.write("📌 Embeddings Shape:", embeddings.shape)
-
+st.write("Embeddings Shape:", embeddings.shape)
 
 # ==========================================
 # 7️⃣ Build Recommendation Models
@@ -149,10 +144,10 @@ st.success("✅ Recommendation Models Ready!")
 
 st.divider()
 
+# ==========================================
+# 8️⃣ Display Function
+# ==========================================
 
-# ==========================================
-# 8️⃣ Display Recommendation Function
-# ==========================================
 def show_results(title, indices):
 
     st.subheader(title)
@@ -161,14 +156,13 @@ def show_results(title, indices):
 
     for i, idx in enumerate(indices):
 
-        if idx < len(image_paths):
-            img = Image.open(image_paths[idx])
-            cols[i].image(img, width=150)
-
+        img = Image.open(image_paths[idx])
+        cols[i].image(img, width=150)
 
 # ==========================================
-# 9️⃣ Upload Query Image UI
+# 9️⃣ Upload Query Image
 # ==========================================
+
 uploaded_file = st.file_uploader(
     "📌 Upload Query Animal Image",
     type=["jpg", "jpeg", "png"]
@@ -176,33 +170,23 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
 
-    # Load Uploaded Image
     query_img = Image.open(uploaded_file)
 
     st.image(query_img, caption="📷 Query Image", width=250)
 
-    # Extract Query Embedding
     query_vector = extract_embedding(query_img)
 
     k = 5
 
-    # ==============================
-    # KNN Search
-    # ==============================
+    # ---- KNN ----
     distances_knn, indices_knn = knn.kneighbors([query_vector], k)
-
     show_results("✅ KNN Recommendations", indices_knn[0])
 
-    # ==============================
-    # FAISS Flat Search
-    # ==============================
+    # ---- FAISS Flat ----
     D_flat, I_flat = index_flat.search(np.array([query_vector]), k)
+    show_results("⚡ FAISS Flat Recommendations", I_flat[0])
 
-    show_results("⚡ FAISS Flat Index Recommendations", I_flat[0])
-
-    # ==============================
-    # FAISS IVF Search
-    # ==============================
+    # ---- FAISS IVF ----
     D_ivf, I_ivf = index_ivf.search(np.array([query_vector]), k)
+    show_results("🚀 FAISS IVF Recommendations", I_ivf[0])
 
-    show_results("🚀 FAISS IVF Index Recommendations", I_ivf[0])
