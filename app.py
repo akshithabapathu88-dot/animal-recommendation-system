@@ -11,7 +11,7 @@ from tensorflow.keras.applications import MobileNetV2
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 
 # ==========================================
-# 1️⃣ Streamlit Page Setup
+# 1️⃣ Page Setup
 # ==========================================
 st.set_page_config(page_title="Animal Recommendation System", layout="wide")
 
@@ -46,7 +46,7 @@ if not os.path.exists(DATASET_FOLDER):
     st.success("✅ Dataset Downloaded Successfully!")
 
 # ==========================================
-# 3️⃣ Load Dataset Image Paths
+# 3️⃣ Load Image Paths
 # ==========================================
 image_paths = []
 
@@ -62,7 +62,7 @@ if len(image_paths) == 0:
     st.stop()
 
 # ==========================================
-# 4️⃣ Load MobileNetV2 Model
+# 4️⃣ Load Model
 # ==========================================
 @st.cache_resource
 def load_model():
@@ -71,7 +71,7 @@ def load_model():
 model = load_model()
 
 # ==========================================
-# 5️⃣ Extract Embedding Function
+# 5️⃣ Embedding Function
 # ==========================================
 def extract_embedding(img):
 
@@ -85,7 +85,7 @@ def extract_embedding(img):
     return emb.flatten()
 
 # ==========================================
-# 6️⃣ Load or Create Embeddings (Normalized)
+# 6️⃣ Create / Load Normalized Embeddings
 # ==========================================
 embedding_file = "animal_embeddings.npy"
 
@@ -108,34 +108,33 @@ if not os.path.exists(embedding_file):
 
     embeddings = np.array(embeddings).astype("float32")
 
-    # Normalize embeddings (CRITICAL)
+    # Normalize embeddings
     faiss.normalize_L2(embeddings)
 
     np.save(embedding_file, embeddings)
-
-    st.success("✅ Embeddings Extracted and Saved!")
+    st.success("✅ Embeddings Created & Saved")
 
 else:
     embeddings = np.load(embedding_file).astype("float32")
     faiss.normalize_L2(embeddings)
-    st.success("✅ Embeddings Loaded Successfully!")
+    st.success("✅ Embeddings Loaded")
 
-st.write("Embeddings Shape:", embeddings.shape)
+st.write("Embedding Shape:", embeddings.shape)
 
 # ==========================================
-# 7️⃣ Build Recommendation Models (Cosine)
+# 7️⃣ Build Models (Cosine Similarity)
 # ==========================================
 
-# ---- KNN (cosine distance) ----
+# KNN
 knn = NearestNeighbors(n_neighbors=5, metric="cosine")
 knn.fit(embeddings)
 
-# ---- FAISS Flat (Inner Product = Cosine) ----
+# FAISS Flat (Inner Product)
 dim = embeddings.shape[1]
 index_flat = faiss.IndexFlatIP(dim)
 index_flat.add(embeddings)
 
-# ---- FAISS IVF (Inner Product) ----
+# FAISS IVF
 nlist = 50
 quantizer = faiss.IndexFlatIP(dim)
 
@@ -150,11 +149,11 @@ index_ivf.train(embeddings)
 index_ivf.add(embeddings)
 index_ivf.nprobe = 10
 
-st.success("✅ All Recommendation Models Ready!")
+st.success("✅ Models Ready")
 st.divider()
 
 # ==========================================
-# 8️⃣ Display Recommendation Function
+# 8️⃣ Display Function
 # ==========================================
 def show_results(title, indices):
     st.subheader(title)
@@ -179,41 +178,31 @@ if uploaded_file is not None:
     query_vector = extract_embedding(query_img).astype("float32")
     query_vector = np.expand_dims(query_vector, axis=0)
 
-    # Normalize query embedding
+    # Normalize query
     faiss.normalize_L2(query_vector)
 
     k = 5
-    threshold = 0.65   # Adjust if needed
 
     # ==============================
-    # KNN Recommendations
-    # ==============================
-    distances_knn, indices_knn = knn.kneighbors(query_vector, k)
-    best_similarity_knn = 1 - distances_knn[0][0]
-
-    if best_similarity_knn < threshold:
-        st.error("❌ No similar animal images found (KNN)")
-    else:
-        show_results("✅ KNN Recommendations", indices_knn[0])
-
-    # ==============================
-    # FAISS Flat Recommendations
+    # Compute Similarities
     # ==============================
     D_flat, I_flat = index_flat.search(query_vector, k)
-    best_similarity_flat = D_flat[0][0]
+    best_similarity = D_flat[0][0]
 
-    if best_similarity_flat < threshold:
-        st.error("❌ No similar animal images found (FAISS Flat)")
+    # 🔥 Adaptive threshold (based on dataset similarity)
+    dataset_mean_similarity = np.mean(index_flat.search(embeddings[:100], 2)[0][:,1])
+    threshold = dataset_mean_similarity * 0.75
+
+    st.write("Similarity Score:", round(float(best_similarity), 3))
+    st.write("Threshold:", round(float(threshold), 3))
+
+    if best_similarity < threshold:
+        st.error("❌ No similar animal images found in dataset")
     else:
         show_results("⚡ FAISS Flat Recommendations", I_flat[0])
 
-    # ==============================
-    # FAISS IVF Recommendations
-    # ==============================
-    D_ivf, I_ivf = index_ivf.search(query_vector, k)
-    best_similarity_ivf = D_ivf[0][0]
+        distances_knn, indices_knn = knn.kneighbors(query_vector, k)
+        show_results("✅ KNN Recommendations", indices_knn[0])
 
-    if best_similarity_ivf < threshold:
-        st.error("❌ No similar animal images found (FAISS IVF)")
-    else:
+        D_ivf, I_ivf = index_ivf.search(query_vector, k)
         show_results("🚀 FAISS IVF Recommendations", I_ivf[0])
