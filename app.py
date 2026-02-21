@@ -29,16 +29,13 @@ if not os.path.exists(DATASET_FOLDER):
 
     st.warning("Dataset not found. Downloading from Kaggle...")
 
-    # Kaggle secrets
     os.environ["KAGGLE_USERNAME"] = st.secrets["KAGGLE_USERNAME"]
     os.environ["KAGGLE_KEY"] = st.secrets["KAGGLE_KEY"]
 
-    # Download dataset
     os.system(
         "kaggle datasets download -d iamsouravbanerjee/animal-image-dataset-90-different-animals"
     )
 
-    # Extract zip
     with zipfile.ZipFile(
         "animal-image-dataset-90-different-animals.zip", "r"
     ) as zip_ref:
@@ -88,7 +85,7 @@ def extract_embedding(img):
     return emb.flatten()
 
 # ==========================================
-# 6️⃣ Load or Create Embeddings
+# 6️⃣ Load or Create Embeddings (Normalized)
 # ==========================================
 embedding_file = "animal_embeddings.npy"
 
@@ -100,45 +97,57 @@ if not os.path.exists(embedding_file):
     progress = st.progress(0)
 
     for i, img_path in enumerate(image_paths):
-
-        img = Image.open(img_path)
-        emb = extract_embedding(img)
-        embeddings.append(emb)
+        try:
+            img = Image.open(img_path).convert("RGB")
+            emb = extract_embedding(img)
+            embeddings.append(emb)
+        except:
+            continue
 
         progress.progress((i + 1) / len(image_paths))
 
-    embeddings = np.array(embeddings)
+    embeddings = np.array(embeddings).astype("float32")
+
+    # Normalize embeddings (CRITICAL)
+    faiss.normalize_L2(embeddings)
+
     np.save(embedding_file, embeddings)
 
     st.success("✅ Embeddings Extracted and Saved!")
 
 else:
-    embeddings = np.load(embedding_file)
+    embeddings = np.load(embedding_file).astype("float32")
+    faiss.normalize_L2(embeddings)
     st.success("✅ Embeddings Loaded Successfully!")
 
 st.write("Embeddings Shape:", embeddings.shape)
 
 # ==========================================
-# 7️⃣ Build Recommendation Models
+# 7️⃣ Build Recommendation Models (Cosine)
 # ==========================================
 
-# ---- KNN ----
+# ---- KNN (cosine distance) ----
 knn = NearestNeighbors(n_neighbors=5, metric="cosine")
 knn.fit(embeddings)
 
-# ---- FAISS Flat ----
+# ---- FAISS Flat (Inner Product = Cosine) ----
 dim = embeddings.shape[1]
-index_flat = faiss.IndexFlatL2(dim)
+index_flat = faiss.IndexFlatIP(dim)
 index_flat.add(embeddings)
 
-# ---- FAISS IVF ----
+# ---- FAISS IVF (Inner Product) ----
 nlist = 50
-quantizer = faiss.IndexFlatL2(dim)
+quantizer = faiss.IndexFlatIP(dim)
 
-index_ivf = faiss.IndexIVFFlat(quantizer, dim, nlist)
+index_ivf = faiss.IndexIVFFlat(
+    quantizer,
+    dim,
+    nlist,
+    faiss.METRIC_INNER_PRODUCT
+)
+
 index_ivf.train(embeddings)
 index_ivf.add(embeddings)
-
 index_ivf.nprobe = 10
 
 st.success("✅ All Recommendation Models Ready!")
@@ -148,11 +157,8 @@ st.divider()
 # 8️⃣ Display Recommendation Function
 # ==========================================
 def show_results(title, indices):
-
     st.subheader(title)
-
     cols = st.columns(5)
-
     for i, idx in enumerate(indices):
         img = Image.open(image_paths[idx])
         cols[i].image(img, width=150)
@@ -167,29 +173,47 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
 
-    query_img = Image.open(uploaded_file)
-
+    query_img = Image.open(uploaded_file).convert("RGB")
     st.image(query_img, caption="📷 Query Image", width=250)
 
-    query_vector = extract_embedding(query_img)
+    query_vector = extract_embedding(query_img).astype("float32")
+    query_vector = np.expand_dims(query_vector, axis=0)
+
+    # Normalize query embedding
+    faiss.normalize_L2(query_vector)
 
     k = 5
+    threshold = 0.65   # Adjust if needed
 
     # ==============================
     # KNN Recommendations
     # ==============================
-    distances_knn, indices_knn = knn.kneighbors([query_vector], k)
-    show_results("✅ KNN Recommendations", indices_knn[0])
+    distances_knn, indices_knn = knn.kneighbors(query_vector, k)
+    best_similarity_knn = 1 - distances_knn[0][0]
+
+    if best_similarity_knn < threshold:
+        st.error("❌ No similar animal images found (KNN)")
+    else:
+        show_results("✅ KNN Recommendations", indices_knn[0])
 
     # ==============================
     # FAISS Flat Recommendations
     # ==============================
-    D_flat, I_flat = index_flat.search(np.array([query_vector]), k)
-    show_results("⚡ FAISS Flat Recommendations", I_flat[0])
+    D_flat, I_flat = index_flat.search(query_vector, k)
+    best_similarity_flat = D_flat[0][0]
+
+    if best_similarity_flat < threshold:
+        st.error("❌ No similar animal images found (FAISS Flat)")
+    else:
+        show_results("⚡ FAISS Flat Recommendations", I_flat[0])
 
     # ==============================
     # FAISS IVF Recommendations
     # ==============================
-    D_ivf, I_ivf = index_ivf.search(np.array([query_vector]), k)
-    show_results("🚀 FAISS IVF Recommendations", I_ivf[0])
+    D_ivf, I_ivf = index_ivf.search(query_vector, k)
+    best_similarity_ivf = D_ivf[0][0]
 
+    if best_similarity_ivf < threshold:
+        st.error("❌ No similar animal images found (FAISS IVF)")
+    else:
+        show_results("🚀 FAISS IVF Recommendations", I_ivf[0])
