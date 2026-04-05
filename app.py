@@ -125,7 +125,7 @@ st.success("✅ Embeddings Ready")
 st.write("Embedding Shape:", embeddings.shape)
 
 # ==========================================
-# 7️⃣ Build / Load FAISS Index
+# 7️⃣ Load / Build FAISS Index (Cached)
 # ==========================================
 @st.cache_resource
 def load_faiss_index(embeddings, dim):
@@ -152,7 +152,7 @@ knn = NearestNeighbors(n_neighbors=5, metric="cosine")
 knn.fit(embeddings)
 
 # ==========================================
-# 9️⃣ FAISS IVF (optional, no need to save)
+# 9️⃣ FAISS IVF Model
 # ==========================================
 quantizer = faiss.IndexFlatIP(dim)
 index_ivf = faiss.IndexIVFFlat(
@@ -176,8 +176,11 @@ def show_results(title, indices):
     st.subheader(title)
     cols = st.columns(5)
     for i, idx in enumerate(indices):
-        img = Image.open(image_paths[idx])
-        cols[i].image(img, width=150)
+        try:
+            img = Image.open(image_paths[idx])
+            cols[i].image(img, width=150)
+        except:
+            continue
 
 # ==========================================
 # 1️⃣1️⃣ Upload Query Image
@@ -199,12 +202,14 @@ if uploaded_file is not None:
 
     k = 5
 
-    # FAISS Flat Search
+    # FAISS Flat
     D_flat, I_flat = index_flat.search(query_vector, k)
     best_similarity = D_flat[0][0]
 
     # Adaptive threshold
-    dataset_mean_similarity = np.mean(index_flat.search(embeddings[:100], 2)[0][:, 1])
+    dataset_mean_similarity = np.mean(
+        index_flat.search(embeddings[:100], 2)[0][:, 1]
+    )
     threshold = dataset_mean_similarity * 0.75
 
     st.write("Similarity Score:", round(float(best_similarity), 3))
@@ -219,4 +224,4 @@ if uploaded_file is not None:
         show_results("✅ KNN Recommendations", indices_knn[0])
 
         D_ivf, I_ivf = index_ivf.search(query_vector, k)
-        show_results("🚀 FAISS IVF Recommendations", I_ivf[0])s
+        show_results("🚀 FAISS IVF Recommendations", I_ivf[0])
