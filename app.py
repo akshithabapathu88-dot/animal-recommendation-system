@@ -21,7 +21,7 @@ st.markdown("✅ KNN   ⚡ FAISS Flat   🚀 FAISS IVF")
 st.divider()
 
 # ==========================================
-# 2️⃣ Kaggle Dataset Auto Download
+# 2️⃣ Dataset Setup (Download only once)
 # ==========================================
 DATASET_FOLDER = "animals"
 
@@ -55,14 +55,14 @@ for root, dirs, files in os.walk(DATASET_FOLDER):
         if file.lower().endswith((".jpg", ".jpeg", ".png")):
             image_paths.append(os.path.join(root, file))
 
-st.success(f"✅ Total Dataset Images Found: {len(image_paths)}")
-
 if len(image_paths) == 0:
-    st.error("No images found in dataset folder!")
+    st.error("❌ No images found in dataset folder!")
     st.stop()
 
+st.success(f"✅ Total Dataset Images Found: {len(image_paths)}")
+
 # ==========================================
-# 4️⃣ Load Model
+# 4️⃣ Load Model (Cached)
 # ==========================================
 @st.cache_resource
 def load_model():
@@ -74,7 +74,6 @@ model = load_model()
 # 5️⃣ Embedding Function
 # ==========================================
 def extract_embedding(img):
-
     img = img.resize((224, 224))
     img_array = np.array(img)
 
@@ -85,18 +84,20 @@ def extract_embedding(img):
     return emb.flatten()
 
 # ==========================================
-# 6️⃣ Create / Load Normalized Embeddings
+# 6️⃣ Load / Create Embeddings (Cached)
 # ==========================================
-embedding_file = "animal_embeddings.npy"
+@st.cache_data(show_spinner=True)
+def load_or_create_embeddings(image_paths, embedding_file):
 
-if not os.path.exists(embedding_file):
+    if os.path.exists(embedding_file):
+        embeddings = np.load(embedding_file).astype("float32")
+        faiss.normalize_L2(embeddings)
+        return embeddings
 
-    st.warning("Embeddings not found. Creating embeddings...")
+    st.warning("Creating embeddings for the first time...")
 
     embeddings = []
-    progress = st.progress(0)
-
-    for i, img_path in enumerate(image_paths):
+    for img_path in image_paths:
         try:
             img = Image.open(img_path).convert("RGB")
             emb = extract_embedding(img)
@@ -104,44 +105,60 @@ if not os.path.exists(embedding_file):
         except:
             continue
 
-        progress.progress((i + 1) / len(image_paths))
-
     embeddings = np.array(embeddings).astype("float32")
 
-    # Normalize embeddings
     faiss.normalize_L2(embeddings)
-
     np.save(embedding_file, embeddings)
-    st.success("✅ Embeddings Created & Saved")
 
-else:
-    embeddings = np.load(embedding_file).astype("float32")
-    faiss.normalize_L2(embeddings)
-    st.success("✅ Embeddings Loaded")
+    return embeddings
 
+embedding_file = "animal_embeddings.npy"
+embeddings = load_or_create_embeddings(image_paths, embedding_file)
+
+# Safety check
+if len(embeddings) != len(image_paths):
+    st.warning("⚠️ Embeddings mismatch. Rebuilding...")
+    os.remove(embedding_file)
+    st.rerun()
+
+st.success("✅ Embeddings Ready")
 st.write("Embedding Shape:", embeddings.shape)
 
 # ==========================================
-# 7️⃣ Build Models (Cosine Similarity)
+# 7️⃣ Build / Load FAISS Index
 # ==========================================
+@st.cache_resource
+def load_faiss_index(embeddings, dim):
 
-# KNN
+    index_file = "faiss_index.bin"
+
+    if os.path.exists(index_file):
+        index = faiss.read_index(index_file)
+        return index
+
+    index = faiss.IndexFlatIP(dim)
+    index.add(embeddings)
+
+    faiss.write_index(index, index_file)
+    return index
+
+dim = embeddings.shape[1]
+index_flat = load_faiss_index(embeddings, dim)
+
+# ==========================================
+# 8️⃣ KNN Model
+# ==========================================
 knn = NearestNeighbors(n_neighbors=5, metric="cosine")
 knn.fit(embeddings)
 
-# FAISS Flat (Inner Product)
-dim = embeddings.shape[1]
-index_flat = faiss.IndexFlatIP(dim)
-index_flat.add(embeddings)
-
-# FAISS IVF
-nlist = 50
+# ==========================================
+# 9️⃣ FAISS IVF (optional, no need to save)
+# ==========================================
 quantizer = faiss.IndexFlatIP(dim)
-
 index_ivf = faiss.IndexIVFFlat(
     quantizer,
     dim,
-    nlist,
+    50,
     faiss.METRIC_INNER_PRODUCT
 )
 
@@ -153,7 +170,7 @@ st.success("✅ Models Ready")
 st.divider()
 
 # ==========================================
-# 8️⃣ Display Function
+# 🔟 Display Function
 # ==========================================
 def show_results(title, indices):
     st.subheader(title)
@@ -163,7 +180,7 @@ def show_results(title, indices):
         cols[i].image(img, width=150)
 
 # ==========================================
-# 9️⃣ Upload Query Image
+# 1️⃣1️⃣ Upload Query Image
 # ==========================================
 uploaded_file = st.file_uploader(
     "📌 Upload Query Animal Image",
@@ -178,19 +195,16 @@ if uploaded_file is not None:
     query_vector = extract_embedding(query_img).astype("float32")
     query_vector = np.expand_dims(query_vector, axis=0)
 
-    # Normalize query
     faiss.normalize_L2(query_vector)
 
     k = 5
 
-    # ==============================
-    # Compute Similarities
-    # ==============================
+    # FAISS Flat Search
     D_flat, I_flat = index_flat.search(query_vector, k)
     best_similarity = D_flat[0][0]
 
-    # 🔥 Adaptive threshold (based on dataset similarity)
-    dataset_mean_similarity = np.mean(index_flat.search(embeddings[:100], 2)[0][:,1])
+    # Adaptive threshold
+    dataset_mean_similarity = np.mean(index_flat.search(embeddings[:100], 2)[0][:, 1])
     threshold = dataset_mean_similarity * 0.75
 
     st.write("Similarity Score:", round(float(best_similarity), 3))
@@ -205,4 +219,4 @@ if uploaded_file is not None:
         show_results("✅ KNN Recommendations", indices_knn[0])
 
         D_ivf, I_ivf = index_ivf.search(query_vector, k)
-        show_results("🚀 FAISS IVF Recommendations", I_ivf[0])
+        show_results("🚀 FAISS IVF Recommendations", I_ivf[0])s
